@@ -1,0 +1,4 @@
+Challenges faced :
+1. late availablity of sensors for project from CSED block .
+
+2. frontend contains multiple files innform of json , txt , html etc.. hard to find which one to implement for backend.
