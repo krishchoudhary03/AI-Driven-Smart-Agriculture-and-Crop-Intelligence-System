@@ -60,12 +60,6 @@ export function Navbar({ user, onOpenProfile }: NavbarProps) {
             {"Dashboard / डैशबोर्ड"}
           </a>
           <a
-            href="#analytics"
-            className="text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
-          >
-            {"Analytics / विश्लेषण"}
-          </a>
-          <a
             href="#disease"
             className="text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
           >
@@ -133,13 +127,6 @@ export function Navbar({ user, onOpenProfile }: NavbarProps) {
               onClick={() => setMobileOpen(false)}
             >
               {"Dashboard / डैशबोर्ड"}
-            </a>
-            <a
-              href="#analytics"
-              className="text-sm font-medium text-muted-foreground"
-              onClick={() => setMobileOpen(false)}
-            >
-              {"Analytics / विश्लेषण"}
             </a>
             <a
               href="#disease"
@@ -302,18 +289,35 @@ export function Navbar({ user, onOpenProfile }: NavbarProps) {
                     const { data, error } = await supabase.auth.signUp({
                       email,
                       password,
+                      options: {
+                        emailRedirectTo: window.location.origin,
+                      },
                     })
                     if (error) {
-                      alert(error.message)
+                      if (error.message.toLowerCase().includes("rate limit")) {
+                        alert("Too many sign-up attempts. Please wait a few minutes and try again.")
+                      } else {
+                        alert(error.message)
+                      }
                       return
                     }
 
-                    // Auto sign-in after successful registration
+                    // If email confirmation is disabled, auto sign-in
+                    if (data?.user?.identities?.length === 0) {
+                      alert("An account with this email may already exist. Try signing in instead.")
+                      return
+                    }
+
                     const { error: signInError } =
                       await supabase.auth.signInWithPassword({ email, password })
 
                     if (signInError) {
-                      alert("Account created but auto-login failed: " + signInError.message)
+                      // If email confirmation is enabled, user needs to verify first
+                      if (signInError.message.toLowerCase().includes("email not confirmed")) {
+                        alert("Account created! Please check your email to confirm, then sign in.")
+                      } else {
+                        alert("Account created but auto-login failed: " + signInError.message)
+                      }
                     }
 
                     setRegisterOpen(false)

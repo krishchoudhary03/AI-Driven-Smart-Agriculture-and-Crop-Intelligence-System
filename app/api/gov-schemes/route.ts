@@ -14,7 +14,7 @@ const INITIAL_DELAY_MS = 2000
 /* ── Simple in-memory rate limiter ── */
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>()
 const RATE_LIMIT_WINDOW_MS = 60_000
-const RATE_LIMIT_MAX = 10
+const RATE_LIMIT_MAX = 5
 
 function isRateLimited(ip: string): boolean {
   const now = Date.now()
@@ -27,18 +27,14 @@ function isRateLimited(ip: string): boolean {
   return entry.count > RATE_LIMIT_MAX
 }
 
-async function callGeminiText(
-  model: string,
-  key: string,
-  prompt: string
-) {
+async function callGeminiText(model: string, key: string, prompt: string) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`
   return fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.4, maxOutputTokens: 1024 },
+      generationConfig: { temperature: 0.3, maxOutputTokens: 4096 },
     }),
   })
 }
@@ -47,7 +43,7 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-export async function POST(req: NextRequest) {
+export async function GET(req: NextRequest) {
   try {
     /* ── Rate limiting ── */
     const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown"
@@ -58,9 +54,6 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const body = await req.json()
-    const { crop_name, crop_type, field_size, location, sowing_date, sensor } = body
-
     const key = process.env.GEMINI_API_KEY
     if (!key) {
       return NextResponse.json(
@@ -68,55 +61,49 @@ export async function POST(req: NextRequest) {
         { status: 500 }
       )
     }
-    if (!crop_name) {
-      return NextResponse.json(
-        { error: "Crop name is required" },
-        { status: 400 }
-      )
-    }
 
-    /* Build context for the model */
-    let context = `Crop: ${crop_name}`
-    if (crop_type) context += ` (${crop_type})`
-    if (field_size) context += `\nField Size: ${field_size}`
-    if (location) context += `\nLocation: ${location}`
-    if (sowing_date) context += `\nSowing Date: ${sowing_date}`
-    if (sensor) {
-      context += `\nLatest Sensor Data:`
-      if (sensor.moisture != null) context += `\n  Soil Moisture: ${sensor.moisture}%`
-      if (sensor.temperature != null) context += `\n  Temperature: ${sensor.temperature}°C`
-      if (sensor.nitrogen != null) context += `\n  Nitrogen (N): ${sensor.nitrogen} kg/ha`
-      if (sensor.phosphorus != null) context += `\n  Phosphorus (P): ${sensor.phosphorus} kg/ha`
-      if (sensor.potassium != null) context += `\n  Potassium (K): ${sensor.potassium} kg/ha`
-    }
+    const { searchParams } = new URL(req.url)
+    const rawState = searchParams.get("state") || "India"
+    // Sanitize: allow only letters, spaces, and hyphens
+    const state = rawState.replace(/[^a-zA-Z\s-]/g, "").slice(0, 50) || "India"
 
-    const prompt = `You are an expert agricultural yield prediction AI model. Based on the following crop and field data, predict the expected yield.
+    const prompt = `You are an expert on Indian government agricultural schemes and subsidies. Provide a list of 8-10 REAL, CURRENTLY ACTIVE government schemes for farmers in ${state}, India.
 
-${context}
-
-Consider the crop type, location/region, sowing date, field size, soil conditions (moisture, temperature, NPK levels) to make your prediction. Use standard Indian agricultural metrics.
+For each scheme, provide accurate and up-to-date information. Include both central government and state-level schemes if applicable.
 
 Return ONLY valid JSON (no markdown, no code fences), exactly in this structure:
 {
-  "predicted_yield": <number in quintal per hectare>,
-  "yield_range": { "min": <number>, "max": <number> },
-  "confidence": <number 0-100>,
-  "growth_stage": "Seedling" | "Vegetative" | "Flowering" | "Fruiting" | "Maturity" | "Ready to harvest",
-  "factors": [
-    { "factor": "factor name", "impact": "Positive" | "Negative" | "Neutral", "detail": "brief explanation" }
-  ],
-  "recommendation": "1-2 sentence actionable advice to maximize yield",
-  "recommendation_hindi": "Same advice in Hindi"
-}`
+  "schemes": [
+    {
+      "name": "Official scheme name in English",
+      "name_hi": "योजना का नाम हिंदी में",
+      "description": "2-3 sentence description of the scheme, eligibility, and benefits in English",
+      "description_hi": "योजना का विवरण हिंदी में",
+      "benefit": "Key financial benefit (e.g. Rs 6,000/year, 50% subsidy, etc.)",
+      "category": "Category in English (e.g. Income Support, Insurance, Credit, Irrigation, Equipment, Soil, Education, Market)",
+      "category_hi": "श्रेणी हिंदी में",
+      "status": "Active" | "Enrolling" | "Apply Now",
+      "website": "Official website URL (must be a real .gov.in or .nic.in URL)",
+      "apply_url": "Direct application/registration URL if available, otherwise same as website"
+    }
+  ]
+}
 
-    /* ── Try each model with retries + exponential backoff ── */
+IMPORTANT RULES:
+1. Only include REAL schemes that actually exist and are currently active
+2. Website URLs MUST be real, working government websites (e.g. pmkisan.gov.in, pmfby.gov.in, etc.)
+3. Include popular schemes like PM-KISAN, PMFBY, KCC, PM-KISAN Samman Nidhi, Soil Health Card, SMAM, PMKSY etc.
+4. If providing state-specific schemes for ${state}, make sure they are real
+5. Benefit amounts must be accurate and current
+6. All Hindi translations must be natural and accurate`
+
     let lastError = ""
 
     for (const model of MODELS) {
       let delay = INITIAL_DELAY_MS
 
       for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-        console.log(`[predict-yield] model=${model} attempt=${attempt + 1}/${MAX_RETRIES}`)
+        console.log(`[gov-schemes] model=${model} attempt=${attempt + 1}/${MAX_RETRIES}`)
 
         const res = await callGeminiText(model, key, prompt)
 
@@ -130,8 +117,8 @@ Return ONLY valid JSON (no markdown, no code fences), exactly in this structure:
           }
 
           try {
-            const prediction = JSON.parse(jsonStr)
-            return NextResponse.json({ prediction })
+            const result = JSON.parse(jsonStr)
+            return NextResponse.json(result)
           } catch {
             console.error("JSON parse failed:", textContent.slice(0, 300))
             lastError = "Failed to parse AI response. Please try again."
@@ -141,7 +128,7 @@ Return ONLY valid JSON (no markdown, no code fences), exactly in this structure:
 
         if (res.status === 429) {
           const errText = await res.text()
-          console.warn(`[predict-yield] 429 on ${model}, waiting ${delay}ms...`, errText.slice(0, 120))
+          console.warn(`[gov-schemes] 429 on ${model}, waiting ${delay}ms...`, errText.slice(0, 120))
           lastError = "AI service is busy. Retrying..."
           if (attempt < MAX_RETRIES - 1) {
             await sleep(delay)
@@ -152,13 +139,13 @@ Return ONLY valid JSON (no markdown, no code fences), exactly in this structure:
         }
 
         if (res.status === 404) {
-          console.warn(`[predict-yield] model ${model} not found, trying next`)
+          console.warn(`[gov-schemes] model ${model} not found, trying next`)
           lastError = `Model ${model} not available`
           break
         }
 
         const errText = await res.text()
-        console.error(`[predict-yield] ${res.status}:`, errText)
+        console.error(`[gov-schemes] ${res.status}:`, errText)
         return NextResponse.json(
           { error: `Gemini API error (${res.status}): ${errText.slice(0, 200)}` },
           { status: res.status }
@@ -171,7 +158,7 @@ Return ONLY valid JSON (no markdown, no code fences), exactly in this structure:
       { status: 429 }
     )
   } catch (err: any) {
-    console.error("predict-yield route error:", err)
+    console.error("gov-schemes route error:", err)
     return NextResponse.json(
       { error: err.message || "Internal server error" },
       { status: 500 }

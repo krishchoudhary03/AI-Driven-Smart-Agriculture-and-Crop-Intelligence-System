@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabase"
 
 import { Navbar } from "@/components/smart-kisan/navbar"
 import { HeroSection } from "@/components/smart-kisan/hero-section"
+import { CropDiseaseScanner } from "@/components/smart-kisan/crop-disease-scanner"
 import { FarmerDashboard } from "@/components/smart-kisan/farmer-dashboard"
 import { GovSchemes } from "@/components/smart-kisan/gov-schemes"
 import { Footer } from "@/components/smart-kisan/footer"
@@ -75,7 +76,8 @@ export default function SmartKisanPage() {
           </div>
         )}
 
-        <FarmerDashboard />
+        <CropDiseaseScanner />
+        <FarmerDashboard user={user} />
         <GovSchemes />
       </main>
 

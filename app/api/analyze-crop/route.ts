@@ -11,6 +11,22 @@ const MODELS = [
 const MAX_RETRIES = 3
 const INITIAL_DELAY_MS = 2000 // 2 seconds
 
+/* ── Simple in-memory rate limiter ── */
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>()
+const RATE_LIMIT_WINDOW_MS = 60_000 // 1 minute
+const RATE_LIMIT_MAX = 10 // max requests per minute per IP
+
+function isRateLimited(ip: string): boolean {
+  const now = Date.now()
+  const entry = rateLimitMap.get(ip)
+  if (!entry || now > entry.resetAt) {
+    rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS })
+    return false
+  }
+  entry.count++
+  return entry.count > RATE_LIMIT_MAX
+}
+
 async function callGemini(
   model: string,
   key: string,
@@ -41,12 +57,28 @@ function sleep(ms: number) {
 
 export async function POST(req: NextRequest) {
   try {
+    /* ── Rate limiting ── */
+    const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown"
+    if (isRateLimited(clientIp)) {
+      return NextResponse.json(
+        { error: "Too many requests. Please wait before trying again." },
+        { status: 429 }
+      )
+    }
+
     const { image } = await req.json()
 
     const key = process.env.GEMINI_API_KEY
-    if (!image) {
+    if (!image || typeof image !== "string") {
       return NextResponse.json(
-        { error: "Image is required" },
+        { error: "Image is required and must be a string" },
+        { status: 400 }
+      )
+    }
+    /* ── Validate base64 image size (max ~15MB encoded) ── */
+    if (image.length > 20_000_000) {
+      return NextResponse.json(
+        { error: "Image too large. Please upload an image under 15MB." },
         { status: 400 }
       )
     }

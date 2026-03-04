@@ -19,6 +19,14 @@ export function HeroSection() {
       dashboardSection.scrollIntoView({ behavior: "smooth" })
     }
   }
+
+  const handleScanCrop = () => {
+    const diseaseSection = document.getElementById("disease")
+    if (diseaseSection) {
+      diseaseSection.scrollIntoView({ behavior: "smooth" })
+    }
+  }
+
   return (
     <section className="relative overflow-hidden">
       {/* Background Image */}
@@ -64,7 +72,7 @@ export function HeroSection() {
               <span>{"Get Started / शुरू करें"}</span>
               <ArrowRight className="size-4" />
             </Button>
-            <Button variant="outline" size="lg">
+            <Button variant="outline" size="lg" onClick={handleScanCrop}>
               <ScanSearch className="size-5" />
               <span>{"Scan Crop / फसल स्कैन करें"}</span>
             </Button>

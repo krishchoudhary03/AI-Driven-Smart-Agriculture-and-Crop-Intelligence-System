@@ -1,3 +1,6 @@
+"use client"
+
+import { useState, useEffect, useCallback } from "react"
 import {
   Card,
   CardContent,
@@ -16,167 +19,226 @@ import {
   Droplets,
   Wheat,
   GraduationCap,
+  ExternalLink,
+  Loader2,
+  RefreshCw,
+  CreditCard,
+  Sprout,
+  Sun,
 } from "lucide-react"
 
-const schemes = [
-  {
-    icon: IndianRupee,
-    name: "PM-KISAN",
-    nameHindi: "पीएम-किसान सम्मान निधि",
-    description:
-      "Direct income support of Rs 6,000/year in 3 installments to farmer families.",
-    descriptionHindi:
-      "किसान परिवारों को 3 किस्तों में Rs 6,000/वर्ष की सीधी आय सहायता।",
-    amount: "Rs 6,000/year",
-    status: "Active / सक्रिय",
-    statusColor: "bg-primary/15 text-primary border-primary/20",
-    category: "Income Support / आय सहायता",
-  },
-  {
-    icon: Shield,
-    name: "PM Fasal Bima Yojana",
-    nameHindi: "पीएम फसल बीमा योजना",
-    description:
-      "Crop insurance at low premium rates. Kharif: 2%, Rabi: 1.5%, Commercial: 5%.",
-    descriptionHindi:
-      "कम प्रीमियम दरों पर फसल बीमा। खरीफ: 2%, रबी: 1.5%, वाणिज्यिक: 5%।",
-    amount: "Low Premium",
-    status: "Enrolling / नामांकन",
-    statusColor: "bg-amber-100 text-amber-700 border-amber-200",
-    category: "Insurance / बीमा",
-  },
-  {
-    icon: Tractor,
-    name: "Sub-Mission on Agri Mechanization",
-    nameHindi: "कृषि यंत्रीकरण उप-मिशन (SMAM)",
-    description:
-      "50-80% subsidy on farm equipment like tractors, harvesters, and irrigation tools.",
-    descriptionHindi:
-      "ट्रैक्टर, हार्वेस्टर और सिंचाई उपकरणों पर 50-80% सब्सिडी।",
-    amount: "Up to 80% Subsidy",
-    status: "Active / सक्रिय",
-    statusColor: "bg-primary/15 text-primary border-primary/20",
-    category: "Equipment / उपकरण",
-  },
-  {
-    icon: Droplets,
-    name: "PM Krishi Sinchai Yojana",
-    nameHindi: "पीएम कृषि सिंचाई योजना",
-    description:
-      "Micro irrigation support - drip and sprinkler systems with 55-70% subsidy.",
-    descriptionHindi:
-      "सूक्ष्म सिंचाई सहायता - ड्रिप और स्प्रिंकलर सिस्टम पर 55-70% सब्सिडी।",
-    amount: "55-70% Subsidy",
-    status: "Active / सक्रिय",
-    statusColor: "bg-primary/15 text-primary border-primary/20",
-    category: "Irrigation / सिंचाई",
-  },
-  {
-    icon: Wheat,
-    name: "Soil Health Card Scheme",
-    nameHindi: "मृदा स्वास्थ्य कार्ड योजना",
-    description:
-      "Free soil testing and health card with nutrient recommendations for your soil.",
-    descriptionHindi:
-      "मुफ्त मिट्टी परीक्षण और आपकी मिट्टी के लिए पोषक तत्व सिफारिश कार्ड।",
-    amount: "Free",
-    status: "Active / सक्रिय",
-    statusColor: "bg-primary/15 text-primary border-primary/20",
-    category: "Soil / मिट्टी",
-  },
-  {
-    icon: GraduationCap,
-    name: "Kisan Credit Card (KCC)",
-    nameHindi: "किसान क्रेडिट कार्ड (केसीसी)",
-    description:
-      "Short-term credit for crop production at subsidized interest rate of 4% per annum.",
-    descriptionHindi:
-      "फसल उत्पादन के लिए 4% प्रति वर्ष की रियायती ब्याज दर पर अल्पकालिक ऋण।",
-    amount: "4% Interest",
-    status: "Apply Now / आवेदन करें",
-    statusColor: "bg-blue-100 text-blue-700 border-blue-200",
-    category: "Credit / ऋण",
-  },
-]
+/* ── Types ── */
+interface Scheme {
+  name: string
+  name_hi: string
+  description: string
+  description_hi: string
+  benefit: string
+  category: string
+  category_hi: string
+  status: "Active" | "Enrolling" | "Apply Now"
+  website: string
+  apply_url: string
+}
+
+/* ── Icon picker based on category ── */
+function getCategoryIcon(category: string) {
+  const c = category.toLowerCase()
+  if (c.includes("income") || c.includes("financial")) return IndianRupee
+  if (c.includes("insurance")) return Shield
+  if (c.includes("equipment") || c.includes("mechani")) return Tractor
+  if (c.includes("irrigation") || c.includes("water")) return Droplets
+  if (c.includes("soil")) return Wheat
+  if (c.includes("credit") || c.includes("loan")) return CreditCard
+  if (c.includes("education") || c.includes("training")) return GraduationCap
+  if (c.includes("market")) return Sun
+  if (c.includes("seed") || c.includes("organic")) return Sprout
+  return Landmark
+}
+
+function statusStyle(status: string) {
+  switch (status) {
+    case "Active":
+      return "bg-primary/15 text-primary border-primary/20"
+    case "Enrolling":
+      return "bg-amber-100 text-amber-700 border-amber-200"
+    case "Apply Now":
+      return "bg-blue-100 text-blue-700 border-blue-200"
+    default:
+      return "bg-primary/15 text-primary border-primary/20"
+  }
+}
+
+const statusHindi: Record<string, string> = {
+  Active: "सक्रिय",
+  Enrolling: "नामांकन",
+  "Apply Now": "आवेदन करें",
+}
 
 export function GovSchemes() {
+  const [schemes, setSchemes] = useState<Scheme[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+
+  const fetchSchemes = useCallback(async () => {
+    setLoading(true)
+    setError("")
+    try {
+      const res = await fetch("/api/gov-schemes")
+      const data = await res.json()
+      if (!res.ok) {
+        setError(data.error || "Failed to load schemes")
+        return
+      }
+      setSchemes(data.schemes || [])
+    } catch (err: any) {
+      setError(err.message || "Network error — please try again")
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchSchemes()
+  }, [fetchSchemes])
+
   return (
     <section id="schemes" className="mx-auto max-w-7xl px-4 py-16 lg:px-8">
-      <div className="mb-10">
-        <Badge
-          variant="secondary"
-          className="mb-3 border border-primary/20 bg-primary/10 text-primary"
+      <div className="mb-10 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <Badge
+            variant="secondary"
+            className="mb-3 border border-primary/20 bg-primary/10 text-primary"
+          >
+            <Landmark className="size-3" />
+            <span>{"Government Schemes / सरकारी योजनाएं"}</span>
+          </Badge>
+          <h2 className="text-balance text-3xl font-bold text-foreground md:text-4xl">
+            {"Schemes for Farmers"}
+          </h2>
+          <p className="mt-1 text-lg text-muted-foreground">
+            {"किसानों के लिए सरकारी योजनाएं और सब्सिडी — powered by Gemini AI"}
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={fetchSchemes}
+          disabled={loading}
+          className="shrink-0"
         >
-          <Landmark className="size-3" />
-          <span>{"Government Schemes / सरकारी योजनाएं"}</span>
-        </Badge>
-        <h2 className="text-balance text-3xl font-bold text-foreground md:text-4xl">
-          {"Schemes for Farmers"}
-        </h2>
-        <p className="mt-1 text-lg text-muted-foreground">
-          {"किसानों के लिए सरकारी योजनाएं और सब्सिडी"}
-        </p>
+          <RefreshCw className={`size-4 ${loading ? "animate-spin" : ""}`} />
+          <span>{loading ? "Loading..." : "Refresh / ताज़ा करें"}</span>
+        </Button>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {schemes.map((scheme) => (
-          <Card
-            key={scheme.name}
-            className="group transition-shadow hover:shadow-md"
-          >
-            <CardHeader>
-              <div className="flex items-start justify-between">
-                <div className="flex size-10 items-center justify-center rounded-lg bg-primary/10">
-                  <scheme.icon className="size-5 text-primary" />
-                </div>
-                <Badge
-                  variant="outline"
-                  className={`text-[10px] ${scheme.statusColor}`}
-                >
-                  {scheme.status}
-                </Badge>
-              </div>
-              <CardTitle className="mt-2 text-base">{scheme.name}</CardTitle>
-              <CardDescription className="text-xs">
-                {scheme.nameHindi}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-4">
-              <div>
-                <p className="text-sm leading-relaxed text-foreground">
-                  {scheme.description}
-                </p>
-                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                  {scheme.descriptionHindi}
-                </p>
-              </div>
-              <div className="flex items-center justify-between">
-                <div className="flex flex-col">
-                  <span className="text-[10px] text-muted-foreground">
-                    {"Benefit / लाभ"}
-                  </span>
-                  <span className="text-sm font-bold text-primary">
-                    {scheme.amount}
-                  </span>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-primary hover:text-primary"
-                >
-                  <span className="text-xs">{"Details / विवरण"}</span>
-                  <ArrowRight className="size-3" />
-                </Button>
-              </div>
-              <div>
-                <Badge variant="secondary" className="text-[10px]">
-                  {scheme.category}
-                </Badge>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+      {/* Loading state */}
+      {loading && schemes.length === 0 && (
+        <div className="flex flex-col items-center justify-center py-20">
+          <Loader2 className="mb-4 size-10 animate-spin text-primary" />
+          <p className="text-lg font-semibold text-foreground">
+            Fetching latest government schemes...
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Gemini AI से नवीनतम सरकारी योजनाएं प्राप्त कर रहे हैं...
+          </p>
+        </div>
+      )}
+
+      {/* Error state */}
+      {error && !loading && (
+        <Card className="border-destructive/30 bg-destructive/5">
+          <CardContent className="flex flex-col items-center gap-4 py-10 text-center">
+            <p className="text-sm text-destructive">{error}</p>
+            <Button variant="outline" size="sm" onClick={fetchSchemes}>
+              <RefreshCw className="size-4" />
+              <span>Try Again / पुनः प्रयास करें</span>
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Schemes grid */}
+      {schemes.length > 0 && (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {schemes.map((scheme, idx) => {
+            const Icon = getCategoryIcon(scheme.category)
+            return (
+              <Card
+                key={`${scheme.name}-${idx}`}
+                className="group flex flex-col transition-shadow hover:shadow-md"
+              >
+                <CardHeader>
+                  <div className="flex items-start justify-between">
+                    <div className="flex size-10 items-center justify-center rounded-lg bg-primary/10">
+                      <Icon className="size-5 text-primary" />
+                    </div>
+                    <Badge
+                      variant="outline"
+                      className={`text-[10px] ${statusStyle(scheme.status)}`}
+                    >
+                      {scheme.status} / {statusHindi[scheme.status] || scheme.status}
+                    </Badge>
+                  </div>
+                  <CardTitle className="mt-2 text-base">{scheme.name}</CardTitle>
+                  <CardDescription className="text-xs">
+                    {scheme.name_hi}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="flex flex-1 flex-col gap-4">
+                  <div className="flex-1">
+                    <p className="text-sm leading-relaxed text-foreground">
+                      {scheme.description}
+                    </p>
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                      {scheme.description_hi}
+                    </p>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div className="flex flex-col">
+                      <span className="text-[10px] text-muted-foreground">
+                        {"Benefit / लाभ"}
+                      </span>
+                      <span className="text-sm font-bold text-primary">
+                        {scheme.benefit}
+                      </span>
+                    </div>
+                    <Badge variant="secondary" className="text-[10px]">
+                      {scheme.category} / {scheme.category_hi}
+                    </Badge>
+                  </div>
+
+                  {/* Live website links */}
+                  <div className="flex flex-wrap gap-2 border-t pt-3">
+                    {scheme.website && (
+                      <a
+                        href={scheme.website}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 rounded-md border border-primary/20 bg-primary/5 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10"
+                      >
+                        <ExternalLink className="size-3" />
+                        Official Website
+                      </a>
+                    )}
+                    {scheme.apply_url && scheme.apply_url !== scheme.website && (
+                      <a
+                        href={scheme.apply_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-100"
+                      >
+                        <ArrowRight className="size-3" />
+                        Apply Online / ऑनलाइन आवेदन
+                      </a>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )
+          })}
+        </div>
+      )}
 
       {/* CTA Banner */}
       <Card className="mt-10 border-primary/20 bg-primary/5">
@@ -191,7 +253,15 @@ export function GovSchemes() {
               }
             </p>
           </div>
-          <Button size="lg" className="shrink-0 font-semibold">
+          <Button
+            size="lg"
+            className="shrink-0 font-semibold"
+            onClick={() => {
+              if (schemes.length > 0 && schemes[0].apply_url) {
+                window.open(schemes[0].apply_url, "_blank", "noopener,noreferrer")
+              }
+            }}
+          >
             <Landmark className="size-4" />
             <span>{"Apply Now / अभी आवेदन करें"}</span>
           </Button>
