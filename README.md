@@ -1,4 +1,4 @@
-
+website - https://smartkisanai.vercel.app/
 1. Introduction::
 The AI-Driven Smart Agriculture & Crop Intelligence System is an advanced technological solution designed to modernize traditional farming practices. By integrating Artificial Intelligence (AI) and Internet of Things (IoT) sensors, the system aims to optimize resource management, enhance crop yields, and provide farmers with actionable insights to mitigate risks associated with climate change and resource scarcity.
 
