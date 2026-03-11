@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
 
+<<<<<<< HEAD
 /* Models to try in order — lite models have highest free-tier quota */
+=======
+>>>>>>> b58f3ec (feat: add Gemini-powered gov schemes with real .gov.in portal links)
 const MODELS = [
   "gemini-2.5-flash-lite",
   "gemini-2.0-flash-lite",
@@ -11,6 +14,7 @@ const MODELS = [
 const MAX_RETRIES = 3
 const INITIAL_DELAY_MS = 2000
 
+<<<<<<< HEAD
 /* ── Simple in-memory rate limiter ── */
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>()
 const RATE_LIMIT_WINDOW_MS = 60_000
@@ -27,6 +31,8 @@ function isRateLimited(ip: string): boolean {
   return entry.count > RATE_LIMIT_MAX
 }
 
+=======
+>>>>>>> b58f3ec (feat: add Gemini-powered gov schemes with real .gov.in portal links)
 async function callGeminiText(model: string, key: string, prompt: string) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`
   return fetch(url, {
@@ -34,7 +40,11 @@ async function callGeminiText(model: string, key: string, prompt: string) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
+<<<<<<< HEAD
       generationConfig: { temperature: 0.3, maxOutputTokens: 4096 },
+=======
+      generationConfig: { temperature: 0.2, maxOutputTokens: 4096 },
+>>>>>>> b58f3ec (feat: add Gemini-powered gov schemes with real .gov.in portal links)
     }),
   })
 }
@@ -43,6 +53,7 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+<<<<<<< HEAD
 export async function GET(req: NextRequest) {
   try {
     /* ── Rate limiting ── */
@@ -54,6 +65,33 @@ export async function GET(req: NextRequest) {
       )
     }
 
+=======
+const PROMPT = `You are an expert on Indian Government agricultural schemes and subsidies for farmers.
+
+Return a JSON array of 8-10 REAL, currently active Indian government schemes for farmers. Each scheme MUST be a real scheme run by the Government of India (central or state). Include the ACTUAL official portal URL where farmers can register or apply.
+
+For each scheme return this exact structure:
+{
+  "name": "Official scheme name in English",
+  "nameHindi": "Scheme name in Hindi (Devanagari script)",
+  "description": "2-3 sentence description explaining what the scheme offers, eligibility, and benefits",
+  "descriptionHindi": "Same description in Hindi",
+  "amount": "Key financial benefit (e.g. 'Rs 6,000/year', 'Up to 80% Subsidy', 'Free', '4% Interest')",
+  "status": "Active / सक्रिय" or "Enrolling / नामांकन" or "Apply Now / आवेदन करें",
+  "category": "Category in English / Hindi (e.g. 'Income Support / आय सहायता')",
+  "portalUrl": "The REAL official government portal URL (e.g. https://pmkisan.gov.in/)",
+  "portalName": "Name of the portal (e.g. 'PM-KISAN Portal')"
+}
+
+IMPORTANT RULES:
+- Only include REAL schemes with REAL .gov.in or .nic.in portal URLs
+- Include well-known schemes like PM-KISAN, PM Fasal Bima Yojana, Kisan Credit Card, PM Krishi Sinchai Yojana, Soil Health Card, eNAM, SMAM, Agriculture Infrastructure Fund, etc.
+- The portalUrl must be the actual working official government website
+- Return ONLY valid JSON array (no markdown, no code fences, no explanation)`
+
+export async function GET(req: NextRequest) {
+  try {
+>>>>>>> b58f3ec (feat: add Gemini-powered gov schemes with real .gov.in portal links)
     const key = process.env.GEMINI_API_KEY
     if (!key) {
       return NextResponse.json(
@@ -62,6 +100,7 @@ export async function GET(req: NextRequest) {
       )
     }
 
+<<<<<<< HEAD
     const { searchParams } = new URL(req.url)
     const rawState = searchParams.get("state") || "India"
     // Sanitize: allow only letters, spaces, and hyphens
@@ -97,6 +136,8 @@ IMPORTANT RULES:
 5. Benefit amounts must be accurate and current
 6. All Hindi translations must be natural and accurate`
 
+=======
+>>>>>>> b58f3ec (feat: add Gemini-powered gov schemes with real .gov.in portal links)
     let lastError = ""
 
     for (const model of MODELS) {
@@ -105,7 +146,11 @@ IMPORTANT RULES:
       for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
         console.log(`[gov-schemes] model=${model} attempt=${attempt + 1}/${MAX_RETRIES}`)
 
+<<<<<<< HEAD
         const res = await callGeminiText(model, key, prompt)
+=======
+        const res = await callGeminiText(model, key, PROMPT)
+>>>>>>> b58f3ec (feat: add Gemini-powered gov schemes with real .gov.in portal links)
 
         if (res.ok) {
           const data = await res.json()
@@ -117,11 +162,30 @@ IMPORTANT RULES:
           }
 
           try {
+<<<<<<< HEAD
             const result = JSON.parse(jsonStr)
             return NextResponse.json(result)
           } catch {
             console.error("JSON parse failed:", textContent.slice(0, 300))
             lastError = "Failed to parse AI response. Please try again."
+=======
+            const schemes = JSON.parse(jsonStr)
+            if (!Array.isArray(schemes)) {
+              lastError = "Invalid response format from AI"
+              break
+            }
+            return NextResponse.json(
+              { schemes },
+              {
+                headers: {
+                  "Cache-Control": "public, s-maxage=3600, stale-while-revalidate=7200",
+                },
+              }
+            )
+          } catch {
+            console.error("JSON parse failed:", textContent.slice(0, 300))
+            lastError = "Failed to parse AI response"
+>>>>>>> b58f3ec (feat: add Gemini-powered gov schemes with real .gov.in portal links)
             break
           }
         }
@@ -154,6 +218,7 @@ IMPORTANT RULES:
     }
 
     return NextResponse.json(
+<<<<<<< HEAD
       { error: lastError || "All AI models are currently rate-limited. Please wait and try again." },
       { status: 429 }
     )
@@ -163,5 +228,14 @@ IMPORTANT RULES:
       { error: err.message || "Internal server error" },
       { status: 500 }
     )
+=======
+      { error: lastError || "All AI models are currently rate-limited. Please try again." },
+      { status: 429 }
+    )
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Internal server error"
+    console.error("gov-schemes route error:", err)
+    return NextResponse.json({ error: message }, { status: 500 })
+>>>>>>> b58f3ec (feat: add Gemini-powered gov schemes with real .gov.in portal links)
   }
 }
