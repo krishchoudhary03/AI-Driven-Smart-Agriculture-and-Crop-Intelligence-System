@@ -1,6 +1,7 @@
 <div align="center">
 
 # 🌾 SmartKisan AI
+https://smartkisanai.vercel.app/
 
 ### AI-Powered Precision Agriculture Dashboard for Indian Farmers
 
