@@ -1,15 +1,19 @@
 import { NextRequest, NextResponse } from "next/server"
 
-/* Models to try in order — lite models have highest free-tier quota */
+/* Models that actually exist as of 2026 — all use v1beta */
 const MODELS = [
-  "gemini-2.5-flash-lite",
-  "gemini-2.0-flash-lite",
-  "gemini-2.5-flash",
-  "gemini-2.0-flash",
+  "gemini-2.5-flash-lite",  // cheapest, fastest
+  "gemini-2.5-flash",       // fallback
 ]
 
-const MAX_RETRIES = 3
-const INITIAL_DELAY_MS = 2000
+const API_VERSION = "v1beta"
+
+const MAX_RETRIES = 1
+const INITIAL_DELAY_MS = 5000
+
+/* ── In-memory cache to avoid repeated API calls ── */
+const cache = new Map<string, { data: unknown; expiresAt: number }>()
+const CACHE_TTL_MS = 10 * 60 * 1000 // 10 minutes
 
 /* ── Simple in-memory rate limiter ── */
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>()
@@ -28,13 +32,13 @@ function isRateLimited(ip: string): boolean {
 }
 
 async function callGeminiText(model: string, key: string, prompt: string) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`
+  const url = `https://generativelanguage.googleapis.com/${API_VERSION}/models/${model}:generateContent?key=${key}`
   return fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.3, maxOutputTokens: 4096 },
+      generationConfig: { temperature: 0.3, maxOutputTokens: 2048 },
     }),
   })
 }
@@ -47,10 +51,24 @@ export async function GET(req: NextRequest) {
   try {
     /* ── Rate limiting ── */
     const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown"
+
+    const { searchParams } = new URL(req.url)
+    const rawState = searchParams.get("state") || "India"
+    const state = rawState.replace(/[^a-zA-Z\s-]/g, "").slice(0, 50) || "India"
+    const cacheKey = `schemes_${state.toLowerCase()}`
+
+    /* ── Check cache first ── */
+    const cached = cache.get(cacheKey)
+    if (cached && Date.now() < cached.expiresAt) {
+      return NextResponse.json(cached.data)
+    }
+
     if (isRateLimited(clientIp)) {
+      // If rate-limited but we have stale cache, return it
+      if (cached) return NextResponse.json(cached.data)
       return NextResponse.json(
-        { error: "Too many requests. Please wait before trying again." },
-        { status: 429 }
+        { schemes: FALLBACK_SCHEMES },
+        { status: 200 }
       )
     }
 
@@ -62,40 +80,27 @@ export async function GET(req: NextRequest) {
       )
     }
 
-    const { searchParams } = new URL(req.url)
-    const rawState = searchParams.get("state") || "India"
-    // Sanitize: allow only letters, spaces, and hyphens
-    const state = rawState.replace(/[^a-zA-Z\s-]/g, "").slice(0, 50) || "India"
+    const prompt = `You are an expert on Indian government agricultural schemes. Provide exactly 5 REAL, CURRENTLY ACTIVE government schemes for farmers in ${state}, India.
 
-    const prompt = `You are an expert on Indian government agricultural schemes and subsidies. Provide a list of 8-10 REAL, CURRENTLY ACTIVE government schemes for farmers in ${state}, India.
-
-For each scheme, provide accurate and up-to-date information. Include both central government and state-level schemes if applicable.
-
-Return ONLY valid JSON (no markdown, no code fences), exactly in this structure:
+Return ONLY valid JSON (no markdown, no code fences):
 {
   "schemes": [
     {
-      "name": "Official scheme name in English",
-      "name_hi": "योजना का नाम हिंदी में",
-      "description": "2-3 sentence description of the scheme, eligibility, and benefits in English",
-      "description_hi": "योजना का विवरण हिंदी में",
-      "benefit": "Key financial benefit (e.g. Rs 6,000/year, 50% subsidy, etc.)",
-      "category": "Category in English (e.g. Income Support, Insurance, Credit, Irrigation, Equipment, Soil, Education, Market)",
-      "category_hi": "श्रेणी हिंदी में",
-      "status": "Active" | "Enrolling" | "Apply Now",
-      "website": "Official website URL (must be a real .gov.in or .nic.in URL)",
-      "apply_url": "Direct application/registration URL if available, otherwise same as website"
+      "name": "Official scheme name",
+      "name_hi": "हिंदी नाम",
+      "description": "1-2 sentence description",
+      "description_hi": "विवरण हिंदी में",
+      "benefit": "Key benefit (e.g. Rs 6,000/year)",
+      "category": "Category",
+      "category_hi": "श्रेणी",
+      "status": "Active",
+      "website": "real .gov.in URL",
+      "apply_url": "application URL"
     }
   ]
 }
 
-IMPORTANT RULES:
-1. Only include REAL schemes that actually exist and are currently active
-2. Website URLs MUST be real, working government websites (e.g. pmkisan.gov.in, pmfby.gov.in, etc.)
-3. Include popular schemes like PM-KISAN, PMFBY, KCC, PM-KISAN Samman Nidhi, Soil Health Card, SMAM, PMKSY etc.
-4. If providing state-specific schemes for ${state}, make sure they are real
-5. Benefit amounts must be accurate and current
-6. All Hindi translations must be natural and accurate`
+Only include real schemes with real .gov.in URLs. Include PM-KISAN, PMFBY, KCC, Soil Health Card, PMKSY. Keep descriptions short to save tokens.`
 
     let lastError = ""
 
@@ -118,6 +123,8 @@ IMPORTANT RULES:
 
           try {
             const result = JSON.parse(jsonStr)
+            // Cache the successful result
+            cache.set(cacheKey, { data: result, expiresAt: Date.now() + CACHE_TTL_MS })
             return NextResponse.json(result)
           } catch {
             console.error("JSON parse failed:", textContent.slice(0, 300))
@@ -153,15 +160,78 @@ IMPORTANT RULES:
       }
     }
 
-    return NextResponse.json(
-      { error: lastError || "All AI models are currently rate-limited. Please wait and try again." },
-      { status: 429 }
-    )
+    // All models exhausted — return fallback static data so the page always works
+    console.warn("[gov-schemes] All models failed, returning fallback data. Last error:", lastError)
+    if (lastError.includes("429") || lastError.toLowerCase().includes("busy") || lastError.toLowerCase().includes("rate")) {
+      console.warn("[gov-schemes] Free tier rate limit hit")
+    }
+    return NextResponse.json({ schemes: FALLBACK_SCHEMES })
   } catch (err: any) {
     console.error("gov-schemes route error:", err)
-    return NextResponse.json(
-      { error: err.message || "Internal server error" },
-      { status: 500 }
-    )
+    return NextResponse.json({ schemes: FALLBACK_SCHEMES })
   }
 }
+
+/* ── Hardcoded fallback schemes — always available ── */
+const FALLBACK_SCHEMES = [
+  {
+    name: "PM-KISAN Samman Nidhi",
+    name_hi: "\u092a\u094d\u0930\u0927\u093e\u0928\u092e\u0902\u0924\u094d\u0930\u0940 \u0915\u093f\u0938\u093e\u0928 \u0938\u092e\u094d\u092e\u093e\u0928 \u0928\u093f\u0927\u093f",
+    description: "Direct income support of Rs 6,000 per year to all landholding farmer families, paid in three equal installments.",
+    description_hi: "\u0938\u092d\u0940 \u092d\u0942\u092e\u093f\u0927\u093e\u0930\u0915 \u0915\u093f\u0938\u093e\u0928 \u092a\u0930\u093f\u0935\u093e\u0930\u094b\u0902 \u0915\u094b \u092a\u094d\u0930\u0924\u093f \u0935\u0930\u094d\u0937 \u20b96,000 \u0915\u0940 \u0906\u092f \u0938\u0939\u093e\u092f\u0924\u093e\u0964",
+    benefit: "\u20b96,000/year",
+    category: "Income Support",
+    category_hi: "\u0906\u092f \u0938\u0939\u093e\u092f\u0924\u093e",
+    status: "Active",
+    website: "https://pmkisan.gov.in",
+    apply_url: "https://pmkisan.gov.in/registrationform.aspx",
+  },
+  {
+    name: "Pradhan Mantri Fasal Bima Yojana (PMFBY)",
+    name_hi: "\u092a\u094d\u0930\u0927\u093e\u0928\u092e\u0902\u0924\u094d\u0930\u0940 \u092b\u0938\u0932 \u092c\u0940\u092e\u093e \u092f\u094b\u091c\u0928\u093e",
+    description: "Crop insurance providing financial support for crop loss due to natural calamities, pests, and diseases.",
+    description_hi: "\u092a\u094d\u0930\u093e\u0915\u0943\u0924\u093f\u0915 \u0906\u092a\u0926\u093e\u0913\u0902 \u0938\u0947 \u092b\u0938\u0932 \u0939\u093e\u0928\u093f \u092a\u0930 \u0935\u093f\u0924\u094d\u0924\u0940\u092f \u0938\u0939\u093e\u092f\u0924\u093e\u0964",
+    benefit: "Up to full sum insured",
+    category: "Insurance",
+    category_hi: "\u092c\u0940\u092e\u093e",
+    status: "Active",
+    website: "https://pmfby.gov.in",
+    apply_url: "https://pmfby.gov.in",
+  },
+  {
+    name: "Kisan Credit Card (KCC)",
+    name_hi: "\u0915\u093f\u0938\u093e\u0928 \u0915\u094d\u0930\u0947\u0921\u093f\u091f \u0915\u093e\u0930\u094d\u0921",
+    description: "Affordable credit for crop production and post-harvest expenses at subsidized interest rates.",
+    description_hi: "\u0930\u093f\u092f\u093e\u092f\u0924\u0940 \u092c\u094d\u092f\u093e\u091c \u0926\u0930\u094b\u0902 \u092a\u0930 \u092b\u0938\u0932 \u0909\u0924\u094d\u092a\u093e\u0926\u0928 \u0915\u0947 \u0932\u093f\u090f \u0915\u093f\u092b\u093e\u092f\u0924\u0940 \u090b\u0923\u0964",
+    benefit: "4% interest rate",
+    category: "Credit",
+    category_hi: "\u090b\u0923",
+    status: "Active",
+    website: "https://pmkisan.gov.in/KCCForm.aspx",
+    apply_url: "https://pmkisan.gov.in/KCCForm.aspx",
+  },
+  {
+    name: "Soil Health Card Scheme",
+    name_hi: "\u092e\u0943\u0926\u093e \u0938\u094d\u0935\u093e\u0938\u094d\u0925\u094d\u092f \u0915\u093e\u0930\u094d\u0921 \u092f\u094b\u091c\u0928\u093e",
+    description: "Free soil testing with crop-wise nutrient and fertilizer recommendations.",
+    description_hi: "\u092b\u0938\u0932-\u0935\u093e\u0930 \u092a\u094b\u0937\u0915 \u0924\u0924\u094d\u0935 \u0905\u0928\u0941\u0936\u0902\u0938\u093e\u0913\u0902 \u0915\u0947 \u0938\u093e\u0925 \u092e\u0941\u092b\u094d\u0924 \u092e\u093f\u091f\u094d\u091f\u0940 \u092a\u0930\u0940\u0915\u094d\u0937\u0923\u0964",
+    benefit: "Free soil testing",
+    category: "Soil",
+    category_hi: "\u092e\u0943\u0926\u093e",
+    status: "Active",
+    website: "https://soilhealth.dac.gov.in",
+    apply_url: "https://soilhealth.dac.gov.in",
+  },
+  {
+    name: "PM Krishi Sinchai Yojana (PMKSY)",
+    name_hi: "\u092a\u094d\u0930\u0927\u093e\u0928\u092e\u0902\u0924\u094d\u0930\u0940 \u0915\u0943\u0937\u093f \u0938\u093f\u0902\u091a\u093e\u0908 \u092f\u094b\u091c\u0928\u093e",
+    description: "Subsidies up to 55% for micro-irrigation like drip and sprinkler systems.",
+    description_hi: "\u0921\u094d\u0930\u093f\u092a \u0914\u0930 \u0938\u094d\u092a\u094d\u0930\u093f\u0902\u0915\u0932\u0930 \u091c\u0948\u0938\u0940 \u0938\u0942\u0915\u094d\u0937\u094d\u092e \u0938\u093f\u0902\u091a\u093e\u0908 \u092a\u0930 55% \u0924\u0915 \u0938\u092c\u094d\u0938\u093f\u0921\u0940\u0964",
+    benefit: "Up to 55% subsidy",
+    category: "Irrigation",
+    category_hi: "\u0938\u093f\u0902\u091a\u093e\u0908",
+    status: "Active",
+    website: "https://pmksy.gov.in",
+    apply_url: "https://pmksy.gov.in",
+  },
+]

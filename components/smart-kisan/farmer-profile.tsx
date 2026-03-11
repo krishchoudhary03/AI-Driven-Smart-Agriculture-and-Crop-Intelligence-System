@@ -42,8 +42,7 @@ import {
   Bar,
   BarChart,
 } from "recharts"
-import CropImageAnalyzer from "@/components/smart-kisan/crop-image-analyzer"
-import { Camera } from "lucide-react"
+import { CropDiseaseScanner } from "@/components/smart-kisan/crop-disease-scanner"
 
 interface FarmerProfileProps {
   user: any
@@ -1322,24 +1321,7 @@ export function FarmerProfile({ user }: FarmerProfileProps) {
       {/* ══════════════════════════════════════════════ */}
       {/*  6.5  AI CROP IMAGE SCANNER                   */}
       {/* ══════════════════════════════════════════════ */}
-      <div className="mb-10">
-        <div className="mb-4">
-          <Badge
-            variant="secondary"
-            className="mb-3 border border-primary/20 bg-primary/10 text-primary"
-          >
-            <Camera className="size-3" />
-            <span>{"AI Crop Scanner / AI फसल स्कैनर"}</span>
-          </Badge>
-          <h3 className="text-2xl font-bold text-foreground">
-            {"Crop Disease & Health Scanner / फसल रोग एवं स्वास्थ्य स्कैनर"}
-          </h3>
-          <p className="mt-1 text-muted-foreground">
-            {"Upload a crop photo — Gemini AI will analyze health, nutrition, irrigation & harvest time"}
-          </p>
-        </div>
-        <CropImageAnalyzer />
-      </div>
+      <CropDiseaseScanner />
 
       {/* ══════════════════════════════════════════════ */}
       {/*  7.  YIELD PREDICTION (ML Model)              */}

@@ -217,8 +217,20 @@ export default function CropImageAnalyzer() {
             "❌ Wrong image! This is not a crop/plant photo. Please upload a clear photo of a crop, plant, or leaf. / यह फसल की तस्वीर नहीं है। कृपया फसल, पौधे या पत्ती की तस्वीर अपलोड करें।"
           )
         } else if (res.status === 429) {
+          const retryAfterSec =
+            typeof data.retryAfter === "number" && data.retryAfter > 0
+              ? data.retryAfter
+              : 60
           setError(
-            "AI service is busy (rate limit). The server tried multiple models with retries. Please wait 1-2 minutes and try again."
+            `AI service rate limit reached. Please wait ${retryAfterSec}s and try again.`
+          )
+        } else if (res.status === 503) {
+          const retryAfterSec =
+            typeof data.retryAfter === "number" && data.retryAfter > 0
+              ? data.retryAfter
+              : 20
+          setError(
+            `AI service is facing high demand. Please wait ${retryAfterSec}s and try again.`
           )
         } else {
           setError(data.error || "Analysis failed")
