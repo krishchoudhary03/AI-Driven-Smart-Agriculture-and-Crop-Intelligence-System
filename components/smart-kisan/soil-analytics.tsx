@@ -78,6 +78,15 @@ function getStatus(value: number, type: "moisture" | "temp" | "npk" | "ph") {
   return { text: "Low / कम", color: "bg-red-100 text-red-700" }
 }
 
+function isFine(value: number, type: "moisture" | "temp" | "nitrogen" | "phosphorus" | "potassium" | "ph") {
+  if (type === "moisture") return value >= 40 && value <= 70
+  if (type === "temp") return value >= 18 && value <= 30
+  if (type === "nitrogen") return value >= 50 && value <= 120
+  if (type === "phosphorus") return value >= 25 && value <= 70
+  if (type === "potassium") return value >= 40 && value <= 100
+  return value >= 6 && value <= 7.5
+}
+
 export function SoilAnalytics() {
   const [readings, setReadings] = useState<SensorReading[]>(defaultReadings)
   const [nutrients, setNutrients] = useState<NutrientInput>({
@@ -137,6 +146,50 @@ export function SoilAnalytics() {
     [nutrients]
   )
 
+  const quickChecks = useMemo(
+    () => [
+      {
+        key: "moisture",
+        label: "Moisture / नमी",
+        value: `${latestReading.moisture}%`,
+        fine: isFine(latestReading.moisture, "moisture"),
+      },
+      {
+        key: "temp",
+        label: "Temp / तापमान",
+        value: `${latestReading.temperature}\u00B0C`,
+        fine: isFine(latestReading.temperature, "temp"),
+      },
+      {
+        key: "nitrogen",
+        label: "Nitrogen / नाइट्रोजन",
+        value: `${nutrients.nitrogen} kg/ha`,
+        fine: isFine(nutrients.nitrogen, "nitrogen"),
+      },
+      {
+        key: "phosphorus",
+        label: "Phosphorus / फॉस्फोरस",
+        value: `${nutrients.phosphorus} kg/ha`,
+        fine: isFine(nutrients.phosphorus, "phosphorus"),
+      },
+      {
+        key: "potassium",
+        label: "Potassium / पोटैशियम",
+        value: `${nutrients.potassium} kg/ha`,
+        fine: isFine(nutrients.potassium, "potassium"),
+      },
+      {
+        key: "ph",
+        label: "pH / पीएच",
+        value: `${nutrients.ph}`,
+        fine: isFine(nutrients.ph, "ph"),
+      },
+    ],
+    [latestReading, nutrients]
+  )
+
+  const overallFine = quickChecks.every((item) => item.fine)
+
   function handleAddReading() {
     const m = parseFloat(sensorForm.moisture)
     const t = parseFloat(sensorForm.temperature)
@@ -192,7 +245,7 @@ export function SoilAnalytics() {
       </div>
 
       {/* Sensor Data Input Forms */}
-      <div className="mb-8 grid gap-6 lg:grid-cols-2">
+      <div className="mb-8 grid gap-6 lg:grid-cols-3">
         {/* Moisture & Temperature Input */}
         <Card className="border-dashed border-primary/30 bg-primary/[0.03]">
           <CardHeader className="pb-4">
@@ -385,6 +438,53 @@ export function SoilAnalytics() {
               <p className="text-[11px] text-muted-foreground">
                 {"Leave empty to keep current value / मौजूदा मान रखने के लिए खाली छोड़ें"}
               </p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-dashed border-primary/30 bg-primary/[0.03]">
+          <CardHeader className="pb-4">
+            <CardTitle className="text-lg">
+              {"Quick Field Status / त्वरित स्थिति"}
+            </CardTitle>
+            <CardDescription>
+              {"Short health check from latest measures"}
+              <br />
+              {"नवीनतम मापों से तुरंत स्थिति"}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-col gap-3">
+              {quickChecks.map((item) => (
+                <div
+                  key={item.key}
+                  className="flex items-center justify-between gap-3 rounded-md border border-primary/15 bg-background/70 px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-medium text-foreground">
+                      {item.label}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">{item.value}</p>
+                  </div>
+                  <span
+                    className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                      item.fine
+                        ? "bg-primary/15 text-primary"
+                        : "bg-amber-100 text-amber-700"
+                    }`}
+                  >
+                    {item.fine
+                      ? "Fine / ठीक"
+                      : "Needs Improvement / सुधार चाहिए"}
+                  </span>
+                </div>
+              ))}
+
+              <div className="mt-1 rounded-md border border-primary/20 bg-primary/10 p-3 text-xs font-medium text-foreground">
+                {overallFine
+                  ? "Overall: Field condition is stable / कुल स्थिति: खेत की स्थिति ठीक है"
+                  : "Overall: Some values need improvement / कुल स्थिति: कुछ मानों में सुधार चाहिए"}
+              </div>
             </div>
           </CardContent>
         </Card>
