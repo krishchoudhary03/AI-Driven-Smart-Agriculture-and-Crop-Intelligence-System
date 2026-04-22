@@ -90,7 +90,7 @@ export function GovSchemes() {
         setError(data.error || "Failed to load schemes")
         return
       }
-      setSchemes(data.schemes || [])
+      setSchemes(data.data?.schemes || data.schemes || [])
     } catch (err: any) {
       setError(err.message || "Network error — please try again")
     } finally {

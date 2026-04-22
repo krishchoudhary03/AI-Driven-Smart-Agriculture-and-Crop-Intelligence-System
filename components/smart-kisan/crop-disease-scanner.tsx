@@ -224,14 +224,15 @@ export function CropDiseaseScanner() {
       const data = await res.json()
 
       if (!res.ok) {
-        if (data.not_crop) {
+        const errorData = data.data || data
+        if (errorData.not_crop) {
           setError(
             "This is not a crop/plant photo. Please upload a clear photo of a crop, plant, or leaf."
           )
         } else if (res.status === 429) {
           const retryAfterSec =
-            typeof data.retryAfter === "number" && data.retryAfter > 0
-              ? data.retryAfter
+            typeof errorData.retryAfter === "number" && errorData.retryAfter > 0
+              ? errorData.retryAfter
               : 60
           const until = Date.now() + retryAfterSec * 1000
           setRateLimitUntil(until)
@@ -240,12 +241,12 @@ export function CropDiseaseScanner() {
             `Free tier limit reached. Button will re-enable in ${retryAfterSec}s.`
           )
         } else {
-          setError(data.error || "Analysis failed")
+          setError(errorData.error || "Analysis failed")
         }
         return
       }
 
-      setAnalysis(data.analysis)
+      setAnalysis(data.data?.analysis || data.analysis)
     } catch (err: any) {
       setError(err.message || "Network error — please try again")
     } finally {

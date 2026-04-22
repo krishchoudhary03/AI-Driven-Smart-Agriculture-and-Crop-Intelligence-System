@@ -5,7 +5,13 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ''
 
 // Avoid crashing during static build when env vars are not yet available
 export const supabase: SupabaseClient = supabaseUrl
-  ? createClient(supabaseUrl, supabaseAnonKey)
+  ? createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        autoRefreshToken: false, // Disable auto-refresh to avoid token errors
+        persistSession: true,
+        detectSessionInUrl: false,
+      },
+    })
   : (new Proxy({} as SupabaseClient, {
       get: (_target, prop) => {
         if (prop === 'auth') {

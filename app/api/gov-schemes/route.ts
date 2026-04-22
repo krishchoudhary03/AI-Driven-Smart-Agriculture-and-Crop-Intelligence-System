@@ -1,4 +1,23 @@
 import { NextRequest, NextResponse } from "next/server"
+import {
+  addSecurityHeaders,
+  addCorsHeaders,
+  getClientIp,
+  checkRateLimit,
+  createErrorResponse,
+  createSuccessResponse,
+} from "@/lib/security"
+import { logError } from "@/lib/errors"
+import { TelemetryService } from "@/lib/telemetry"
+
+// Initialize telemetry
+const telemetry = new TelemetryService({
+  enabled: true,
+  batchSize: 10,
+  flushIntervalMs: 5000,
+  endpoint: process.env.TELEMETRY_ENDPOINT || '/api/telemetry',
+  retryAttempts: 3,
+})
 
 /* Models that actually exist as of 2026 — all use v1beta */
 const MODELS = [
@@ -14,22 +33,6 @@ const INITIAL_DELAY_MS = 5000
 /* ── In-memory cache to avoid repeated API calls ── */
 const cache = new Map<string, { data: unknown; expiresAt: number }>()
 const CACHE_TTL_MS = 10 * 60 * 1000 // 10 minutes
-
-/* ── Simple in-memory rate limiter ── */
-const rateLimitMap = new Map<string, { count: number; resetAt: number }>()
-const RATE_LIMIT_WINDOW_MS = 60_000
-const RATE_LIMIT_MAX = 5
-
-function isRateLimited(ip: string): boolean {
-  const now = Date.now()
-  const entry = rateLimitMap.get(ip)
-  if (!entry || now > entry.resetAt) {
-    rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS })
-    return false
-  }
-  entry.count++
-  return entry.count > RATE_LIMIT_MAX
-}
 
 async function callGeminiText(model: string, key: string, prompt: string) {
   const url = `https://generativelanguage.googleapis.com/${API_VERSION}/models/${model}:generateContent?key=${key}`
@@ -47,10 +50,16 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+export async function OPTIONS(req: NextRequest) {
+  const response = NextResponse.json(null, { status: 200 })
+  return addCorsHeaders(response)
+}
+
 export async function GET(req: NextRequest) {
   try {
     /* ── Rate limiting ── */
-    const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown"
+    const clientIp = getClientIp(req)
+    const { limited, retryAfterSec } = checkRateLimit(clientIp, 5, 60 * 1000)
 
     const { searchParams } = new URL(req.url)
     const rawState = searchParams.get("state") || "India"
@@ -60,24 +69,25 @@ export async function GET(req: NextRequest) {
     /* ── Check cache first ── */
     const cached = cache.get(cacheKey)
     if (cached && Date.now() < cached.expiresAt) {
-      return NextResponse.json(cached.data)
+      return createSuccessResponse(cached.data, 200)
     }
 
-    if (isRateLimited(clientIp)) {
+    if (limited) {
       // If rate-limited but we have stale cache, return it
-      if (cached) return NextResponse.json(cached.data)
-      return NextResponse.json(
-        { schemes: FALLBACK_SCHEMES },
-        { status: 200 }
+      if (cached) {
+        return createSuccessResponse(cached.data, 200)
+      }
+      return createErrorResponse(
+        "Too many requests. Please wait before trying again.",
+        429,
+        { retryAfter: retryAfterSec }
       )
     }
 
     const key = process.env.GEMINI_API_KEY
     if (!key) {
-      return NextResponse.json(
-        { error: "GEMINI_API_KEY is not configured on the server" },
-        { status: 500 }
-      )
+      logError(new Error("GEMINI_API_KEY not configured"))
+      return createErrorResponse("Service not configured", 500)
     }
 
     const prompt = `You are an expert on Indian government agricultural schemes. Provide exactly 5 REAL, CURRENTLY ACTIVE government schemes for farmers in ${state}, India.
@@ -125,9 +135,16 @@ Only include real schemes with real .gov.in URLs. Include PM-KISAN, PMFBY, KCC, 
             const result = JSON.parse(jsonStr)
             // Cache the successful result
             cache.set(cacheKey, { data: result, expiresAt: Date.now() + CACHE_TTL_MS })
-            return NextResponse.json(result)
-          } catch {
-            console.error("JSON parse failed:", textContent.slice(0, 300))
+            
+            // Track successful schemes retrieval
+            telemetry.trackEvent('schemes_retrieved', undefined, {
+              state: state,
+              scheme_count: result.schemes?.length || 0,
+            })
+            
+            return createSuccessResponse(result, 200)
+          } catch (parseErr) {
+            logError(parseErr, { context: "JSON parse failed in gov-schemes" })
             lastError = "Failed to parse AI response. Please try again."
             break
           }
@@ -135,7 +152,7 @@ Only include real schemes with real .gov.in URLs. Include PM-KISAN, PMFBY, KCC, 
 
         if (res.status === 429) {
           const errText = await res.text()
-          console.warn(`[gov-schemes] 429 on ${model}, waiting ${delay}ms...`, errText.slice(0, 120))
+          console.warn(`[gov-schemes] 429 on ${model}`, errText.slice(0, 120))
           lastError = "AI service is busy. Retrying..."
           if (attempt < MAX_RETRIES - 1) {
             await sleep(delay)
@@ -152,23 +169,22 @@ Only include real schemes with real .gov.in URLs. Include PM-KISAN, PMFBY, KCC, 
         }
 
         const errText = await res.text()
-        console.error(`[gov-schemes] ${res.status}:`, errText)
-        return NextResponse.json(
-          { error: `Gemini API error (${res.status}): ${errText.slice(0, 200)}` },
-          { status: res.status }
-        )
+        logError(new Error(`Gemini API error ${res.status}`), { context: "gov-schemes" })
+        return createErrorResponse(`Service error: ${res.status}`, res.status)
       }
     }
 
     // All models exhausted — return fallback static data so the page always works
     console.warn("[gov-schemes] All models failed, returning fallback data. Last error:", lastError)
-    if (lastError.includes("429") || lastError.toLowerCase().includes("busy") || lastError.toLowerCase().includes("rate")) {
-      console.warn("[gov-schemes] Free tier rate limit hit")
-    }
-    return NextResponse.json({ schemes: FALLBACK_SCHEMES })
-  } catch (err: any) {
-    console.error("gov-schemes route error:", err)
-    return NextResponse.json({ schemes: FALLBACK_SCHEMES })
+    return createSuccessResponse({ schemes: FALLBACK_SCHEMES }, 200)
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err))
+    logError(error, { context: "gov-schemes route" })
+    
+    // Track error
+    telemetry.trackError(error, { endpoint: '/api/gov-schemes' })
+    
+    return createSuccessResponse({ schemes: FALLBACK_SCHEMES }, 200)
   }
 }
 

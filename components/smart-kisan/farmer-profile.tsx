@@ -415,10 +415,11 @@ export function FarmerProfile({ user }: FarmerProfileProps) {
 
       const data = await res.json()
       if (!res.ok) {
-        setYieldError(data.error || "Prediction failed")
+        const errorData = data.data || data
+        setYieldError(errorData.error || "Prediction failed")
         return
       }
-      setYieldResult(data.prediction)
+      setYieldResult(data.data?.prediction || data.prediction)
     } catch (err: any) {
       setYieldError(err.message || "Network error — please try again")
     } finally {

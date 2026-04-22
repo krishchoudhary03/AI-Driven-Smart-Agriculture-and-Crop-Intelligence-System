@@ -9,7 +9,12 @@
     "lint": "eslint .",
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage"
+    "test:coverage": "jest --coverage",
+    "security:audit": "pnpm audit --prod",
+    "security:check": "pnpm audit --prod --fix",
+    "security:report": "pnpm audit --prod --json > security-report.json",
+    "precommit": "pnpm security:audit",
+    "prepush": "pnpm security:audit && pnpm test"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",

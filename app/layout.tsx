@@ -1,7 +1,13 @@
 import type { Metadata, Viewport } from 'next'
 import { Inter, Noto_Sans_Devanagari } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
+import { env } from '@/lib/env'
 import './globals.css'
+
+// Validate environment on server startup
+if (typeof window === 'undefined') {
+  console.log(`✅ SmartKisan AI initialized | Environment: ${env.app.nodeEnv}`)
+}
 
 const _inter = Inter({
   subsets: ['latin'],

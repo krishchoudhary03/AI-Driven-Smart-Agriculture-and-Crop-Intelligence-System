@@ -1,4 +1,24 @@
 import { NextRequest, NextResponse } from "next/server"
+import {
+  addSecurityHeaders,
+  addCorsHeaders,
+  getClientIp,
+  checkRateLimit,
+  createErrorResponse,
+  createSuccessResponse,
+} from "@/lib/security"
+import { validateCropName, validateSensorData } from "@/lib/validation"
+import { logError, withRetry } from "@/lib/errors"
+import { TelemetryService } from "@/lib/telemetry"
+
+// Initialize telemetry
+const telemetry = new TelemetryService({
+  enabled: true,
+  batchSize: 10,
+  flushIntervalMs: 5000,
+  endpoint: process.env.TELEMETRY_ENDPOINT || '/api/telemetry',
+  retryAttempts: 3,
+})
 
 /* Models to try in order — lite models have highest free-tier quota */
 const MODELS = [
@@ -10,22 +30,6 @@ const MODELS = [
 
 const MAX_RETRIES = 3
 const INITIAL_DELAY_MS = 2000
-
-/* ── Simple in-memory rate limiter ── */
-const rateLimitMap = new Map<string, { count: number; resetAt: number }>()
-const RATE_LIMIT_WINDOW_MS = 60_000
-const RATE_LIMIT_MAX = 10
-
-function isRateLimited(ip: string): boolean {
-  const now = Date.now()
-  const entry = rateLimitMap.get(ip)
-  if (!entry || now > entry.resetAt) {
-    rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS })
-    return false
-  }
-  entry.count++
-  return entry.count > RATE_LIMIT_MAX
-}
 
 async function callGeminiText(
   model: string,
@@ -47,32 +51,43 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+export async function OPTIONS(req: NextRequest) {
+  const response = NextResponse.json(null, { status: 200 })
+  return addCorsHeaders(response)
+}
+
 export async function POST(req: NextRequest) {
   try {
     /* ── Rate limiting ── */
-    const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown"
-    if (isRateLimited(clientIp)) {
-      return NextResponse.json(
-        { error: "Too many requests. Please wait before trying again." },
-        { status: 429 }
+    const clientIp = getClientIp(req)
+    const { limited, retryAfterSec } = checkRateLimit(clientIp, 10, 60 * 1000)
+    
+    if (limited) {
+      return createErrorResponse(
+        "Too many requests. Please wait before trying again.",
+        429,
+        { retryAfter: retryAfterSec }
       )
     }
 
     const body = await req.json()
     const { crop_name, crop_type, field_size, location, sowing_date, sensor } = body
 
+    // Validate inputs
+    const cropValidation = validateCropName(crop_name)
+    if (!cropValidation.valid) {
+      return createErrorResponse(cropValidation.error || "Invalid crop name", 400)
+    }
+
+    const sensorValidation = validateSensorData(sensor)
+    if (!sensorValidation.valid) {
+      return createErrorResponse(sensorValidation.error || "Invalid sensor data", 400)
+    }
+
     const key = process.env.GEMINI_API_KEY
     if (!key) {
-      return NextResponse.json(
-        { error: "GEMINI_API_KEY is not configured on the server" },
-        { status: 500 }
-      )
-    }
-    if (!crop_name) {
-      return NextResponse.json(
-        { error: "Crop name is required" },
-        { status: 400 }
-      )
+      logError(new Error("GEMINI_API_KEY not configured"))
+      return createErrorResponse("Service not configured", 500)
     }
 
     /* Build context for the model */
@@ -131,9 +146,17 @@ Return ONLY valid JSON (no markdown, no code fences), exactly in this structure:
 
           try {
             const prediction = JSON.parse(jsonStr)
-            return NextResponse.json({ prediction })
-          } catch {
-            console.error("JSON parse failed:", textContent.slice(0, 300))
+            
+            // Track successful prediction
+            telemetry.trackEvent('yield_predicted', undefined, {
+              crop: crop_name,
+              predicted_yield: prediction.predicted_yield,
+              confidence: prediction.confidence,
+            })
+            
+            return createSuccessResponse({ prediction }, 200)
+          } catch (parseErr) {
+            logError(parseErr, { context: "JSON parse failed in predict-yield" })
             lastError = "Failed to parse AI response. Please try again."
             break
           }
@@ -141,7 +164,7 @@ Return ONLY valid JSON (no markdown, no code fences), exactly in this structure:
 
         if (res.status === 429) {
           const errText = await res.text()
-          console.warn(`[predict-yield] 429 on ${model}, waiting ${delay}ms...`, errText.slice(0, 120))
+          console.warn(`[predict-yield] 429 on ${model}`, errText.slice(0, 120))
           lastError = "AI service is busy. Retrying..."
           if (attempt < MAX_RETRIES - 1) {
             await sleep(delay)
@@ -158,23 +181,22 @@ Return ONLY valid JSON (no markdown, no code fences), exactly in this structure:
         }
 
         const errText = await res.text()
-        console.error(`[predict-yield] ${res.status}:`, errText)
-        return NextResponse.json(
-          { error: `Gemini API error (${res.status}): ${errText.slice(0, 200)}` },
-          { status: res.status }
-        )
+        logError(new Error(`Gemini API error ${res.status}`), { context: "predict-yield" })
+        return createErrorResponse(`Service error: ${res.status}`, res.status)
       }
     }
 
-    return NextResponse.json(
-      { error: lastError || "All AI models are currently rate-limited. Please wait and try again." },
-      { status: 429 }
+    return createErrorResponse(
+      lastError || "All AI models are currently rate-limited. Please wait and try again.",
+      429
     )
-  } catch (err: any) {
-    console.error("predict-yield route error:", err)
-    return NextResponse.json(
-      { error: err.message || "Internal server error" },
-      { status: 500 }
-    )
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err))
+    logError(error, { context: "predict-yield route" })
+    
+    // Track error
+    telemetry.trackError(error, { endpoint: '/api/predict-yield' })
+    
+    return createErrorResponse(error.message || "Internal server error", 500)
   }
 }

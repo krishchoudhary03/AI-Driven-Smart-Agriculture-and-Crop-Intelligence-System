@@ -1,4 +1,24 @@
 import { NextRequest, NextResponse } from "next/server"
+import {
+  addSecurityHeaders,
+  addCorsHeaders,
+  getClientIp,
+  checkRateLimit,
+  createErrorResponse,
+  createSuccessResponse,
+} from "@/lib/security"
+import { validateBase64Image } from "@/lib/validation"
+import { logError } from "@/lib/errors"
+import { TelemetryService } from "@/lib/telemetry"
+
+// Initialize telemetry service
+const telemetry = new TelemetryService({
+  enabled: true,
+  batchSize: 10,
+  flushIntervalMs: 5000,
+  endpoint: process.env.TELEMETRY_ENDPOINT || '/api/telemetry',
+  retryAttempts: 3,
+})
 
 /* Models that actually exist as of 2026 — all use v1beta */
 const MODELS = [
@@ -19,26 +39,6 @@ let lastApiCallTime = 0
 async function waitForCooldown() {
   const gap = Date.now() - lastApiCallTime
   if (gap < 4000) await sleep(4000 - gap)
-}
-
-/* ── Simple in-memory rate limiter ── */
-const rateLimitMap = new Map<string, { count: number; resetAt: number }>()
-const RATE_LIMIT_WINDOW_MS = 60_000 // 1 minute
-const RATE_LIMIT_MAX = 10 // max requests per minute per IP
-
-function getRateLimitStatus(ip: string): { limited: boolean; retryAfterSec: number } {
-  const now = Date.now()
-  const entry = rateLimitMap.get(ip)
-  if (!entry || now > entry.resetAt) {
-    rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS })
-    return { limited: false, retryAfterSec: 0 }
-  }
-  entry.count++
-  const limited = entry.count > RATE_LIMIT_MAX
-  return {
-    limited,
-    retryAfterSec: limited ? Math.max(1, Math.ceil((entry.resetAt - now) / 1000)) : 0,
-  }
 }
 
 async function callGemini(
@@ -70,35 +70,32 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+export async function OPTIONS(req: NextRequest) {
+  const response = NextResponse.json(null, { status: 200 })
+  return addCorsHeaders(response)
+}
+
 export async function POST(req: NextRequest) {
   try {
     /* ── Rate limiting ── */
-    const clientIp = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown"
-    const rateLimit = getRateLimitStatus(clientIp)
-    if (rateLimit.limited) {
-      return NextResponse.json(
-        {
-          error: "Too many requests. Please wait before trying again.",
-          retryAfter: rateLimit.retryAfterSec,
-        },
-        { status: 429 }
+    const clientIp = getClientIp(req)
+    const { limited, retryAfterSec } = checkRateLimit(clientIp, 10, 60 * 1000)
+    
+    if (limited) {
+      return createErrorResponse(
+        "Too many requests. Please wait before trying again.",
+        429,
+        { retryAfter: retryAfterSec }
       )
     }
 
-    const { image } = await req.json()
+    const body = await req.json()
+    const { image } = body
 
-    if (!image || typeof image !== "string") {
-      return NextResponse.json(
-        { error: "Image is required and must be a string" },
-        { status: 400 }
-      )
-    }
-    /* ── Validate base64 image size (max ~15MB encoded) ── */
-    if (image.length > 20_000_000) {
-      return NextResponse.json(
-        { error: "Image too large. Please upload an image under 15MB." },
-        { status: 400 }
-      )
+    // Validate image input
+    const imageValidation = validateBase64Image(image)
+    if (!imageValidation.valid) {
+      return createErrorResponse(imageValidation.error || "Invalid image", 400)
     }
 
     /* ── Build ordered list of API keys to try ── */
@@ -184,7 +181,7 @@ Analyze the image thoroughly. If you cannot identify the crop with certainty, ma
 
     /* ── Try each key, then each model; switch key immediately on 429 ── */
     let lastError = ""
-    let retryAfterSec = 60
+    let retryDelaySec = 60
     let hitRateLimit = false
     let hitTemporaryBusy = false
 
@@ -237,9 +234,17 @@ Analyze the image thoroughly. If you cannot identify the crop with certainty, ma
               }
 
               lastApiCallTime = Date.now()
-              return NextResponse.json({ analysis })
-            } catch {
-              console.error("JSON parse failed:", textContent.slice(0, 300))
+              
+              // Track successful analysis
+              telemetry.trackEvent('crop_analyzed', undefined, {
+                crop: analysis.crop_name,
+                health_score: analysis.health?.percentage,
+                model: model,
+              })
+
+              return createSuccessResponse({ analysis }, 200)
+            } catch (parseErr) {
+              logError(parseErr, { context: "JSON parse failed" })
               lastError = "Failed to parse AI response. Please try again."
               break
             }
@@ -252,14 +257,14 @@ Analyze the image thoroughly. If you cannot identify the crop with certainty, ma
             const retryAfterHeader = geminiResponse.headers.get("retry-after")
             const parsedRetryAfter = retryAfterHeader ? Number.parseInt(retryAfterHeader, 10) : Number.NaN
             if (!Number.isNaN(parsedRetryAfter) && parsedRetryAfter > 0) {
-              retryAfterSec = parsedRetryAfter
+              retryDelaySec = Math.max(retryDelaySec, parsedRetryAfter)
             }
             console.warn(
               `[analyze-crop] 429 on ${keyLabel}/${model}, waiting ${delay}ms...`,
               errText.slice(0, 120)
             )
             lastError =
-              `Rate limit reached. Please wait ${retryAfterSec} seconds and try again. (Free Gemini tier allows ~15 requests/minute)`
+              `Rate limit reached. Please wait ${retryDelaySec} seconds and try again. (Free Gemini tier allows ~15 requests/minute)`
 
             if (attempt < MAX_RETRIES - 1) {
               await sleep(delay)
@@ -295,12 +300,10 @@ Analyze the image thoroughly. If you cannot identify the crop with certainty, ma
 
           // Other error
           const errText = await geminiResponse.text()
-          console.error(`[analyze-crop] ${geminiResponse.status}:`, errText)
-          return NextResponse.json(
-            {
-              error: `Gemini API error (${geminiResponse.status}): ${errText.slice(0, 200)}`,
-            },
-            { status: geminiResponse.status }
+          logError(new Error(`Gemini API error ${geminiResponse.status}`), { errText })
+          return createErrorResponse(
+            `Service error: ${geminiResponse.status}`,
+            geminiResponse.status
           )
         }
       }
@@ -312,38 +315,33 @@ Analyze the image thoroughly. If you cannot identify the crop with certainty, ma
 
     // All models exhausted
     if (hitRateLimit) {
-      return NextResponse.json(
-        {
-          error:
-            lastError ||
-            `Rate limit reached. Please wait ${retryAfterSec} seconds and try again. (Free Gemini tier allows ~15 requests/minute)`,
-          retryAfter: retryAfterSec,
-        },
-        { status: 429 }
+      return createErrorResponse(
+        lastError ||
+          `Rate limit reached. Please wait ${retryDelaySec} seconds and try again.`,
+        429,
+        { retryAfter: Math.max(retryAfterSec, retryDelaySec) }
       )
     }
 
     if (hitTemporaryBusy) {
-      return NextResponse.json(
-        {
-          error: lastError || "AI service is currently experiencing high demand. Please retry in 15-30 seconds.",
-          retryAfter: 20,
-        },
-        { status: 503 }
+      return createErrorResponse(
+        lastError || "AI service is currently experiencing high demand. Please retry in 15-30 seconds.",
+        503,
+        { retryAfter: 20 }
       )
     }
 
-    return NextResponse.json(
-      {
-        error: lastError || "Unable to analyze crop image right now. Please try again.",
-      },
-      { status: 500 }
+    return createErrorResponse(
+      lastError || "Unable to analyze crop image right now. Please try again.",
+      500
     )
-  } catch (err: any) {
-    console.error("analyze-crop route error:", err)
-    return NextResponse.json(
-      { error: err.message || "Internal server error" },
-      { status: 500 }
-    )
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err))
+    logError(error, { context: "analyze-crop route" })
+    
+    // Track error
+    telemetry.trackError(error, { endpoint: '/api/analyze-crop' })
+    
+    return createErrorResponse(error.message || "Internal server error", 500)
   }
 }
